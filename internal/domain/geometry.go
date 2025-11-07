@@ -104,7 +104,7 @@ func BuildGeometryPreprocessData(parsed *ParsedData, opts GeometryOptions) (*Pre
 	for _, parcel := range parsed.Parcels {
 		wkt, err := buildPolygonWKTInternal(parcel, dec)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("地块 %s WKT构建失败: %w", parcel.Attributes[KeyPID], err)
 		}
 		attrs := mapAttributes(parcel.Attributes)
 		features = append(features, Feature{

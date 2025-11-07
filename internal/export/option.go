@@ -50,7 +50,7 @@ const ProcessedFileName = ".processed"
 // 如果找不到对应的格式，将返回一个零值的 exportFormat 和 false。
 func GetFormatDetails(key string) (exportFormat, error) {
 	switch {
-	case strings.EqualFold(key, "SHAPE") || strings.EqualFold(key, "Shapefile") || strings.EqualFold(key, ".shp"):
+	case strings.EqualFold(key, "SHP") || strings.EqualFold(key, "SHAPE") || strings.EqualFold(key, "Shapefile") || strings.EqualFold(key, ".shp"):
 		key = "SHP"
 	case strings.EqualFold(key, "FGB") || strings.EqualFold(key, "FlatGeobuf") || strings.EqualFold(key, ".fgb"):
 		key = "FGB"
@@ -151,6 +151,7 @@ func (c *ExportConfig) Verify() error {
 	return nil
 }
 
+// 确保在非演示模式下创建所需的目录
 func (c *ExportConfig) Prepare() error {
 	if c.DryRun {
 		logger.Log().Debug("已启用 --dry-run 模式, 将不会写入文件")

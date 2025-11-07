@@ -41,7 +41,7 @@ func mapPythonLogLevel(levelStr string) slog.Level {
 	}
 }
 
-func (e *Exporter) InvokePythonExporter(payload []byte) error {
+func (e *Exporter) InvokePythonExporter(payload []byte, totalFiles, totalFeatures int) error {
 	logger.Log().Debug("准备通过标准 I/O 调用 Python 脚本", "payloadSize", len(payload))
 
 	// 1. 配置运行环境
@@ -128,7 +128,7 @@ func (e *Exporter) InvokePythonExporter(payload []byte) error {
 	}
 	count := resultsCount.Load()
 	if count > 0 {
-		logger.Log().Info(fmt.Sprintf("> Python 脚本成功处理了 %d 个文件。", count))
+		logger.Log().Info(fmt.Sprintf("> Python 脚本成功处理了 %d 个文件，共 %d 个要素。", totalFiles, totalFeatures))
 	} else {
 		logger.Log().Info("> Python 脚本执行完成，没有文件需要处理。")
 	}

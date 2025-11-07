@@ -9,9 +9,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
-	"txt2geo/internal/domain"
 	"txt2geo/internal/util"
-	"txt2geo/pkg/charset"
 	"txt2geo/pkg/logger"
 	"txt2geo/pkg/namex"
 	"txt2geo/pkg/pathx"
@@ -107,8 +105,17 @@ func (e *Exporter) previewPlans(plans []ExportPlan) {
 	}
 }
 
+// ExecutionResult 保存计划执行的结果。
+type ExecutionResult struct {
+	Payload      []byte
+	SuccessCount int
+	FailureCount int
+	LayerCount   int
+	FeatureCount int
+}
+
 // executePlans 实际执行所有导出任务。
-func (e *Exporter) executePlans(plans []ExportPlan) ([]byte, int, int, error) {
+func (e *Exporter) executePlans(plans []ExportPlan) (*ExecutionResult, error) {
 	total := len(plans)
 	logger.Log().Info("执行导出计划", "merge", e.Config.Merge, "totalPlans", total, "format", e.Config.FormatKey)
 	isContainer := e.Config.FormatDetails.IsContainer
@@ -123,42 +130,19 @@ func (e *Exporter) executePlans(plans []ExportPlan) ([]byte, int, int, error) {
 	for i, plan := range plans {
 		layerName := plan.OutputName
 		for _, hash := range plan.SourceHashes {
-			if fileData, ok := e.FileCache[hash]; ok {
-				logger.Log().Debug("正在处理文件", "path", fileData.Path, "size", len(fileData.Content))
-				text, _, err := charset.Decode(fileData.Content)
-				if err != nil {
-					logger.Log().Error("文件解码失败", "path", fileData.Path, "error", err)
-					continue
-				}
-				parsed, err := domain.Parse(text)
-				if err != nil {
-					logger.Log().Error("文件解析失败", "path", fileData.Path, "error", err)
-					continue
-				}
-				prepData, err := domain.BuildGeometryPreprocessData(parsed, domain.GeometryOptions{Deduplicate: true, AutoClose: true})
-				if err != nil {
-					logger.Log().Error("几何预处理数据构建失败", "path", fileData.Path, "error", err)
-					continue
-				}
-				featList := make([]map[string]any, 0, len(prepData.Features))
-				for _, feat := range prepData.Features {
-					featList = append(featList, map[string]any{"wkt": feat.WKT, "properties": feat.Attributes})
-				}
-				if len(featList) == 0 {
-					continue
-				}
-				if targetCRS == "" && prepData.EPSG > 0 {
-					targetCRS = fmt.Sprintf("EPSG:%d", prepData.EPSG)
+			if processedFile, ok := e.ProcessedData[hash]; ok {
+				if targetCRS == "" && processedFile.EPSG > 0 {
+					targetCRS = fmt.Sprintf("EPSG:%d", processedFile.EPSG)
 				}
 
-				featureTotal += len(featList) // 统计要素数量
+				featureTotal += len(processedFile.Features) // 统计要素数量
 				datasets = append(datasets, map[string]any{
 					"layer_name":     layerName,
-					"source_path":    fileData.Path,
-					"source_crs":     prepData.CRS,
-					"features":       featList,
-					"total_features": len(featList),
-					"hash":           fileData.Hash,
+					"source_path":    processedFile.FileCache.Path,
+					"source_crs":     processedFile.CRS,
+					"features":       processedFile.Features,
+					"total_features": len(processedFile.Features),
+					"hash":           processedFile.FileCache.Hash,
 				})
 			}
 		}
@@ -167,15 +151,23 @@ func (e *Exporter) executePlans(plans []ExportPlan) ([]byte, int, int, error) {
 		if len(plan.SourceHashes) > 1 {
 			src = slog.Int("totalFiles", len(plan.SourceHashes))
 		} else if len(plan.SourceHashes) == 1 {
-			// 从 FileCache 获取原始路径用于显示
-			if cache, ok := e.FileCache[plan.SourceHashes[0]]; ok {
-				src = slog.String("source", cache.Path)
+			// 从 ProcessedData 获取原始路径用于显示
+			if processedFile, ok := e.ProcessedData[plan.SourceHashes[0]]; ok {
+				src = slog.String("source", processedFile.FileCache.Path)
 			}
 		}
 		progress := fmt.Sprintf("[%0*d/%d]", width, i+1, total)
 		message := fmt.Sprintf("%12s", progress)
 		logger.Log().Info(message, src, "target", plan.displayTarget(isContainer))
 	}
+
+	if len(datasets) == 0 {
+		return &ExecutionResult{
+			SuccessCount: 0,
+			FailureCount: 0,
+		}, nil
+	}
+
 	root := map[string]any{
 		"output_dir": e.Config.OutputDir,
 		"driver":     e.Config.FormatDetails.Driver,
@@ -186,7 +178,13 @@ func (e *Exporter) executePlans(plans []ExportPlan) ([]byte, int, int, error) {
 	}
 	data, err := json.Marshal(root)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, err
 	}
-	return data, total, featureTotal, nil
+	return &ExecutionResult{
+		Payload:      data,
+		SuccessCount: len(datasets),
+		FailureCount: 0,
+		LayerCount:   total,
+		FeatureCount: featureTotal,
+	}, nil
 }

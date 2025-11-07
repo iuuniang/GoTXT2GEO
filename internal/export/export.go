@@ -6,7 +6,9 @@ package export
 import (
 	"errors"
 	"fmt"
+	"txt2geo/internal/domain"
 	"txt2geo/internal/process"
+	"txt2geo/pkg/charset"
 	"txt2geo/pkg/logger"
 	"txt2geo/pkg/pathx"
 )
@@ -22,12 +24,21 @@ type FileCache struct {
 	Hash    string
 }
 
+// ProcessedFile 存储已成功处理的文件结果
+type ProcessedFile struct {
+	FileCache FileCache
+	Features  []map[string]any
+	CRS       string
+	EPSG      int
+}
+
 // Exporter 是负责执行整个导出流程的协调器。
 type Exporter struct {
-	Config    ExportConfig
-	History   *process.ProcessHistory
-	FileCache map[string]FileCache
-	UsedNames map[string]struct{}
+	Config        ExportConfig
+	History       *process.ProcessHistory
+	FileCache     map[string]FileCache
+	ProcessedData map[string]*ProcessedFile // 存储已处理成功的文件数据
+	UsedNames     map[string]struct{}
 }
 
 // NewExporter 创建一个新的导出器实例。
@@ -44,10 +55,50 @@ func NewExporter(config ExportConfig) (*Exporter, error) {
 		return nil, fmt.Errorf("无法初始化处理历史: %w", err)
 	}
 	return &Exporter{
-		Config:    config,
-		History:   history,
-		FileCache: make(map[string]FileCache),
-		UsedNames: make(map[string]struct{}),
+		Config:        config,
+		History:       history,
+		FileCache:     make(map[string]FileCache),
+		ProcessedData: make(map[string]*ProcessedFile),
+		UsedNames:     make(map[string]struct{}),
+	}, nil
+}
+
+// processSingleFileResult 存储单个文件成功处理后的结果（内部使用）
+type processSingleFileResult struct {
+	Features []map[string]any
+	CRS      string
+	EPSG     int
+}
+
+// processSingleFile 封装了处理单个文件的完整逻辑。
+func (e *Exporter) processSingleFile(fileData FileCache) (*processSingleFileResult, error) {
+	logger.Log().Debug("正在处理文件", "path", fileData.Path, "size", len(fileData.Content))
+	text, _, err := charset.Decode(fileData.Content)
+	if err != nil {
+		return nil, fmt.Errorf("文件解码失败: %w", err)
+	}
+	parsed, err := domain.Parse(text)
+	if err != nil {
+		return nil, fmt.Errorf("文件解析失败: %w", err)
+	}
+	prepData, err := domain.BuildGeometryPreprocessData(parsed, domain.GeometryOptions{Deduplicate: true, AutoClose: true})
+	if err != nil {
+		return nil, fmt.Errorf("几何预处理数据构建失败: %w", err)
+	}
+
+	if len(prepData.Features) == 0 {
+		return nil, nil // 没有错误，但也没有要素
+	}
+
+	featList := make([]map[string]any, 0, len(prepData.Features))
+	for _, feat := range prepData.Features {
+		featList = append(featList, map[string]any{"wkt": feat.WKT, "properties": feat.Attributes})
+	}
+
+	return &processSingleFileResult{
+		Features: featList,
+		CRS:      prepData.CRS,
+		EPSG:     prepData.EPSG,
 	}, nil
 }
 
@@ -100,27 +151,59 @@ func (e *Exporter) Execute() error {
 		return ErrNoInputFiles
 	}
 
-	// 3. 根据模式（合并/分散）生成导出计划
+	// 3. 预处理所有文件，只保留成功处理的文件
+	var processFailed int
+	for hash, fileData := range e.FileCache {
+		result, err := e.processSingleFile(fileData)
+		if err != nil {
+			logger.Log().Error("文件预处理失败", "path", fileData.Path, "error", err)
+			processFailed++
+			delete(e.FileCache, hash) // 从缓存中移除失败的文件
+			continue
+		}
+		if result == nil {
+			logger.Log().Warn("文件无有效要素", "path", fileData.Path)
+			processFailed++
+			delete(e.FileCache, hash)
+			continue
+		}
+		e.ProcessedData[hash] = &ProcessedFile{
+			FileCache: fileData,
+			Features:  result.Features,
+			CRS:       result.CRS,
+			EPSG:      result.EPSG,
+		}
+	}
+
+	logger.Log().Info("文件预处理完成", "success", len(e.ProcessedData), "failed", processFailed)
+
+	if len(e.ProcessedData) == 0 {
+		return ErrNoInputFiles
+	}
+
+	// 4. 根据模式（合并/分散）生成导出计划
 	plans, err := e.generatePlans(e.FileCache)
 
 	if err != nil {
 		return fmt.Errorf("生成计划失败: %w", err)
 	}
 
-	// 4. 预览或执行计划
+	// 5. 预览或执行计划
 	if e.Config.DryRun {
 		e.previewPlans(plans)
 		return nil
 	}
-	jsonPayload, layerCount, featCount, err := e.executePlans(plans)
+	result, err := e.executePlans(plans)
 	if err != nil {
 		return fmt.Errorf("执行计划失败: %w", err)
 	}
 
-	//5. 调用 Python 导出器
-	if len(jsonPayload) > 0 {
-		logger.Log().Info("> Python 导出", "files", layerCount, "features", featCount)
-		err = e.InvokePythonExporter(jsonPayload)
+	logger.Log().Info("数据组装完成", "success", result.SuccessCount, "failure", result.FailureCount)
+
+	//6. 调用 Python 导出器
+	if len(result.Payload) > 0 {
+		logger.Log().Info("> Python 导出", "files", result.LayerCount, "features", result.FeatureCount)
+		err = e.InvokePythonExporter(result.Payload, result.LayerCount, result.FeatureCount)
 		if err != nil {
 			return fmt.Errorf("调用 Python 导出失败: %w", err)
 		}
