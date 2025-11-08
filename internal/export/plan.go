@@ -86,38 +86,45 @@ func (e *Exporter) generatePlans(fileCache map[string]FileCache) ([]ExportPlan, 
 // previewPlans 打印导出计划的预览信息。
 func (e *Exporter) previewPlans(plans []ExportPlan) {
 	total := len(plans)
-	logger.Log().Info("预览导出计划", "merge", e.Config.Merge, "totalPlans", total, "format", e.Config.FormatKey)
+	mode := "分散模式"
+	if e.Config.Merge {
+		mode = "合并模式"
+	}
+	logger.Log().Info("[预览] 预览导出计划", "模式", mode, "计划数", total, "格式", e.Config.FormatKey)
 	isContainer := e.Config.FormatDetails.IsContainer
 	width := util.IntDigits(total)
 	for i, plan := range plans {
 		var src slog.Attr
 		if len(plan.SourceHashes) > 1 {
-			src = slog.Int("totalFiles", len(plan.SourceHashes))
+			src = slog.Int("总计", len(plan.SourceHashes))
 		} else if len(plan.SourceHashes) == 1 {
 			// 从 FileCache 获取原始路径用于显示
 			if cache, ok := e.FileCache[plan.SourceHashes[0]]; ok {
-				src = slog.String("source", cache.Path)
+				src = slog.String("源路径", cache.Path)
 			}
 		}
 		progress := fmt.Sprintf("[%0*d/%d]", width, i+1, total)
-		message := fmt.Sprintf("%12s", progress)
-		logger.Log().Info(message, src, "target", plan.displayTarget(isContainer))
+		message := fmt.Sprintf("  %s", progress)
+		logger.Log().Info(message, src, "输出", plan.displayTarget(isContainer))
 	}
 }
 
 // ExecutionResult 保存计划执行的结果。
 type ExecutionResult struct {
 	Payload      []byte
-	SuccessCount int
-	FailureCount int
-	LayerCount   int
-	FeatureCount int
+	SuccessCount int // 成功组装的数据集数量
+	LayerCount   int // 图层数量
+	FeatureCount int // 要素总数
 }
 
 // executePlans 实际执行所有导出任务。
 func (e *Exporter) executePlans(plans []ExportPlan) (*ExecutionResult, error) {
 	total := len(plans)
-	logger.Log().Info("执行导出计划", "merge", e.Config.Merge, "totalPlans", total, "format", e.Config.FormatKey)
+	mode := "分散模式"
+	if e.Config.Merge {
+		mode = "合并模式"
+	}
+	logger.Log().Info("[组装] 组装导出数据", "模式", mode, "计划数", total, "格式", e.Config.FormatKey)
 	isContainer := e.Config.FormatDetails.IsContainer
 	width := util.IntDigits(total)
 
@@ -149,22 +156,21 @@ func (e *Exporter) executePlans(plans []ExportPlan) (*ExecutionResult, error) {
 
 		var src slog.Attr
 		if len(plan.SourceHashes) > 1 {
-			src = slog.Int("totalFiles", len(plan.SourceHashes))
+			src = slog.Int("总计", len(plan.SourceHashes))
 		} else if len(plan.SourceHashes) == 1 {
 			// 从 ProcessedData 获取原始路径用于显示
 			if processedFile, ok := e.ProcessedData[plan.SourceHashes[0]]; ok {
-				src = slog.String("source", processedFile.FileCache.Path)
+				src = slog.String("源路径", processedFile.FileCache.Path)
 			}
 		}
 		progress := fmt.Sprintf("[%0*d/%d]", width, i+1, total)
-		message := fmt.Sprintf("%12s", progress)
-		logger.Log().Info(message, src, "target", plan.displayTarget(isContainer))
+		message := fmt.Sprintf("  %s", progress)
+		logger.Log().Info(message, src, "输出", plan.displayTarget(isContainer))
 	}
 
 	if len(datasets) == 0 {
 		return &ExecutionResult{
 			SuccessCount: 0,
-			FailureCount: 0,
 		}, nil
 	}
 
@@ -183,7 +189,6 @@ func (e *Exporter) executePlans(plans []ExportPlan) (*ExecutionResult, error) {
 	return &ExecutionResult{
 		Payload:      data,
 		SuccessCount: len(datasets),
-		FailureCount: 0,
 		LayerCount:   total,
 		FeatureCount: featureTotal,
 	}, nil

@@ -44,10 +44,38 @@ var rootCmd = &cobra.Command{
 			}
 			logger.Log().Info(fmt.Sprintf("  %d. %s%s", i+1, path, pathType))
 		}
+		// 交互式选择输出格式
+		var formatKey string
+		fmt.Println("请选择输出格式:")
+		fmt.Println("1. SHP (ESRI Shapefile)")
+		fmt.Println("2. FGB (FlatGeobuf)")
+		fmt.Println("3. GPKG (GeoPackage)")
+		fmt.Println("4. GDB (OpenFileGDB)")
+		fmt.Print("输入序号并回车: ")
+		var choice int
+		fmt.Scanln(&choice)
+		switch choice {
+		case 1:
+			formatKey = "SHP"
+		case 2:
+			formatKey = "FGB"
+		case 3:
+			formatKey = "GPKG"
+		case 4:
+			formatKey = "GDB"
+		default:
+			fmt.Println("无效选择，默认使用 FGB 格式。")
+			formatKey = "FGB"
+		}
+
+		fmt.Printf("已选择格式: %s\n", formatKey)
+		fmt.Println("请按下 Enter 键执行导出...")
+		fmt.Scanln()
+
 		exporter, err := export.NewExporter(export.ExportConfig{
 			InputPaths: args,
 			Depth:      0,
-			FormatKey:  "FGB",
+			FormatKey:  formatKey,
 			OutputDir:  "output",
 			Merge:      false,
 		})
@@ -55,12 +83,8 @@ var rootCmd = &cobra.Command{
 			return fmt.Errorf("创建导出器失败: %w", err)
 		}
 
-		fmt.Println("请按下 Enter 键执行导出...")
-		fmt.Scanln() // 等待用户按下 Enter
-
 		logger.Log().Debug("开始执行导出器")
 
-		// 执行导出，并保存可能发生的错误
 		execErr := exporter.Execute()
 		if execErr != nil {
 			logger.Log().Error("导出失败", "error", execErr)
@@ -69,9 +93,8 @@ var rootCmd = &cobra.Command{
 		}
 
 		fmt.Println("操作已完成，请按下 Enter 键退出程序...")
-		fmt.Scanln() // 等待用户按键后退出
+		fmt.Scanln()
 
-		// 在所有交互结束后，返回执行过程中遇到的错误
 		return execErr
 	},
 }

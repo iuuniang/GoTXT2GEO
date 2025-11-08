@@ -100,7 +100,7 @@ func (c *ExportConfig) Verify() error {
 		if err != nil {
 			return fmt.Errorf("无法获取当前工作目录: %w", err)
 		}
-		logger.Log().Debug("未指定输出目录，使用当前目录", "dir", outputdir)
+		logger.Log().Debug("  [配置] 使用当前目录作为输出目录", "目录", outputdir)
 	} else {
 		// 如果已指定，解析为绝对路径
 		outputdir, err = pathx.Resolve(outputdir)
@@ -154,10 +154,10 @@ func (c *ExportConfig) Verify() error {
 // 确保在非演示模式下创建所需的目录
 func (c *ExportConfig) Prepare() error {
 	if c.DryRun {
-		logger.Log().Debug("已启用 --dry-run 模式, 将不会写入文件")
+		logger.Log().Debug("  [预览] 预览模式，跳过文件系统操作")
 		return nil
 	}
-	logger.Log().Debug("创建记录已处理文件 hash 的文件夹", "dir", c.ProcessFileDir())
+	logger.Log().Debug("  [初始化] 初始化处理历史目录", "目录", c.ProcessFileDir())
 	if err := os.MkdirAll(c.ProcessFileDir(), 0o755); err != nil {
 		return fmt.Errorf("创建输出目录失败: %w", err)
 	}

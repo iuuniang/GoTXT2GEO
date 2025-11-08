@@ -42,7 +42,7 @@ func mapPythonLogLevel(levelStr string) slog.Level {
 }
 
 func (e *Exporter) InvokePythonExporter(payload []byte, totalFiles, totalFeatures int) error {
-	logger.Log().Debug("准备通过标准 I/O 调用 Python 脚本", "payloadSize", len(payload))
+	logger.Log().Debug("  [准备] 准备调用 Python", "数据大小", fmt.Sprintf("%d bytes", len(payload)))
 
 	// 1. 配置运行环境
 	prefixPath, pythonPath, err := environ.InitializeQGISEnvironment()
@@ -101,7 +101,7 @@ func (e *Exporter) InvokePythonExporter(payload []byte, totalFiles, totalFeature
 			line := scanner.Bytes() // 使用 Bytes() 避免不必要的字符串转换
 
 			if err := json.Unmarshal(line, &res); err != nil {
-				logger.Log().Error("解析 Python stdout 行失败", "error", err, "line", string(line))
+				logger.Log().Error("[失败] 解析 Python 输出失败", "错误", err, "内容", string(line))
 				continue
 			}
 
@@ -128,9 +128,12 @@ func (e *Exporter) InvokePythonExporter(payload []byte, totalFiles, totalFeature
 	}
 	count := resultsCount.Load()
 	if count > 0 {
-		logger.Log().Info(fmt.Sprintf("> Python 脚本成功处理了 %d 个文件，共 %d 个要素。", totalFiles, totalFeatures))
+		logger.Log().Info("[成功] Python 导出成功",
+			"图层", totalFiles,
+			"地块", totalFeatures,
+			"写入文件", count)
 	} else {
-		logger.Log().Info("> Python 脚本执行完成，没有文件需要处理。")
+		logger.Log().Warn("[警告] Python 执行完成，但未生成文件")
 	}
 	return nil
 }

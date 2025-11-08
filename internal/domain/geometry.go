@@ -93,7 +93,10 @@ func BuildGeometryPreprocessData(parsed *ParsedData, opts GeometryOptions) (*Pre
 	opts.Precision = normalizePrecision(opts.Precision)
 	dec := decimalPlacesFromPrecision(opts.Precision)
 
-	postProcessGeometry(parsed, opts)
+	// 坐标点处理：去除重复点、自动闭合、有效性检查
+	if err := postProcessGeometry(parsed, opts); err != nil {
+		return nil, fmt.Errorf("坐标点处理失败: %w", err)
+	}
 
 	coordSystem, err := BuildCoordinateSystem(parsed)
 	if err != nil {
@@ -104,7 +107,9 @@ func BuildGeometryPreprocessData(parsed *ParsedData, opts GeometryOptions) (*Pre
 	for _, parcel := range parsed.Parcels {
 		wkt, err := buildPolygonWKTInternal(parcel, dec)
 		if err != nil {
-			return nil, fmt.Errorf("地块 %s WKT构建失败: %w", parcel.Attributes[KeyPID], err)
+			// 有一个地块错误，那么为了数据完整性,整个预处理都视为失败
+			// err 中已经包含了地块标识,这里不需要再次添加
+			return nil, err
 		}
 		attrs := mapAttributes(parcel.Attributes)
 		features = append(features, Feature{
@@ -129,16 +134,21 @@ func BuildGeometryPreprocessData(parsed *ParsedData, opts GeometryOptions) (*Pre
 
 // buildPolygonWKTInternal 构建单个地块的WKT
 func buildPolygonWKTInternal(parcel Parcel, decimalPlaces int) (string, error) {
+	parcelID := parcel.Attributes[KeyPID]
+	if parcelID == "" {
+		parcelID = "(未命名地块)"
+	}
+
 	if len(parcel.Rings) == 0 {
-		return "", fmt.Errorf("地块 %s 不包含任何环", parcel.Attributes[KeyPID])
+		return "", fmt.Errorf("地块 %s 不包含任何环", parcelID)
 	}
 	var ringsWKT []string
 	for _, ring := range parcel.Rings {
 		if len(ring) < 4 {
-			return "", fmt.Errorf("地块 %s 的一个环点数少于4，无法构成有效多边形", parcel.Attributes[KeyPID])
+			return "", fmt.Errorf("地块 %s 的一个环点数少于4, 无法构成有效多边形", parcelID)
 		}
 		if ring[0].ID != ring[len(ring)-1].ID {
-			return "", fmt.Errorf("地块 %s 的一个环不是闭合的", parcel.Attributes[KeyPID])
+			return "", fmt.Errorf("地块 %s 的一个环不是闭合的", parcelID)
 		}
 		ringsWKT = append(ringsWKT, buildRingWKTInternal(ring, decimalPlaces))
 	}
@@ -181,17 +191,31 @@ func mapAttributes(attrs map[string]string) map[string]any {
 }
 
 // postProcessGeometry 对所有地块环进行高性能去重与自动闭合（包内部方法）。
-func postProcessGeometry(data *ParsedData, opts GeometryOptions) {
+func postProcessGeometry(data *ParsedData, opts GeometryOptions) error {
 	prec := normalizePrecision(opts.Precision)
 	scale := precisionToScale(prec)
 	for pi := range data.Parcels {
+		parcelID := data.Parcels[pi].Attributes[KeyPID]
+		if parcelID == "" {
+			parcelID = fmt.Sprintf("#%d", pi+1) // 如果没有地块编号，使用索引
+		}
 		for ri, ring := range data.Parcels[pi].Rings {
 			if len(ring) == 0 {
-				continue
+				// 空环应该报错，而不是跳过，保证数据完整性
+				return fmt.Errorf("地块 %s 的环 %d 为空", parcelID, ri+1)
 			}
-			data.Parcels[pi].Rings[ri] = processRing(ring, scale, prec, opts.Deduplicate, opts.AutoClose)
+			processedRing := processRing(ring, scale, prec, opts.Deduplicate, opts.AutoClose)
+
+			// 验证处理后的环是否仍然有效（至少需要4个点才能构成有效多边形）
+			if len(processedRing) < 4 {
+				return fmt.Errorf("地块 %s 的环 %d 处理后点数不足(原始: %d, 处理后: %d, 需要至少4个点)",
+					parcelID, ri+1, len(ring), len(processedRing))
+			}
+
+			data.Parcels[pi].Rings[ri] = processedRing
 		}
 	}
+	return nil
 }
 
 // processRing 执行单个环的：可选去重 -> 可选自动闭合 -> 排序（保持闭合点最后）。
@@ -244,9 +268,11 @@ func deduplicateRing(ring []Point, scale float64) []Point {
 }
 
 // 自动闭合环，首尾点不在容差范围内则补首点
+// 注意：此函数假设输入的环至少有1个点，调用前已经过验证
 func autoCloseRing(ring []Point, tol float64) []Point {
 	n := len(ring)
 	if n == 0 {
+		// 理论上不应该到达这里，因为在 postProcessGeometry 中已验证
 		return ring
 	}
 	if !pointsEqual(ring[0], ring[n-1], tol) {
